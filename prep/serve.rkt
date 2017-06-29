@@ -8,7 +8,10 @@
   (define (loop)
     (accept-and-handle listener)
     (loop))
-  (loop))
+  (define t (thread loop))
+  (lambda ()
+    (kill-thread t)
+    (tcp-close listener)))
 
 (define (accept-and-handle listener)
   (define-values (in out) (tcp-accept listener))
