@@ -1,6 +1,8 @@
 #lang racket
 
-(require xml net/url)
+(require xml
+         net/url
+         racket/control)
 
 ;; More: Systems Programming with Racket
 ;; https://docs.racket-lang.org/more/index.html
@@ -22,6 +24,7 @@
 
 (define (accept-and-handle listener)
   (define cust (make-custodian))
+  (custodian-limit-memory cust (* 50 1024 1024))  ;; 50 MB limit
   (parameterize ([current-custodian cust])
     (define-values (in out) (tcp-accept listener))
     (thread (lambda ()
@@ -47,7 +50,7 @@
     (regexp-match #rx"(\r\n|^)\r\n" in)
     
     ; dispatch:
-    (let ([xexpr (dispatch (list-ref req 1))])
+    (let ([xexpr (prompt (dispatch (list-ref req 1)))])
       ; send reply:
       (display "HTTP/1.0 200 Okay\r\n" out)
       (display "Server: k\r\nContent-Type: text/html\r\n\r\n" out)
@@ -108,3 +111,99 @@
 (hash-set! dispatch-table "reply" reply)
 
 
+
+;; 10. CONTINUATIONS
+
+(define (sum query)
+  (build-request-page "First number: " "/one" ""))
+
+(define (one query)
+  (build-request-page "Second number: " "/two"
+                      (cdr (assq 'number query))))
+
+(define (two query)
+  (let ([n (string->number (cdr (assq 'hidden query)))]
+        [m (string->number (cdr (assq 'number query)))])
+    `(html (body (p "The sum is " ,(number->string (+ m n)))
+                 (p (a ([href "/sum"]) "Again"))))))
+
+(hash-set! dispatch-table "sum" sum)
+(hash-set! dispatch-table "one" one)
+(hash-set! dispatch-table "two" two)
+
+
+;; --- direct style (continuations)
+
+(define (sum2 query)
+  (define m (get-number "First number: "))
+  (define n (get-number "Second number: "))
+  `(html (body (p "The sum is " ,(number->string (+ m n)))
+                 (p (a ([href "/sum2"]) "Again")))))
+
+(hash-set! dispatch-table "sum2" sum2)
+
+
+(define (get-number label)
+  (define query
+    ; generate a url for the current computation:
+    (send/suspend
+     ; receive the computation-as-URL here:
+     (lambda (k-url)
+       ; generate the query-page result for this connection.
+       ; send the query result to the saved-computation url:
+       (build-request-page label k-url ""))))
+  ; we arrive here later in a new connection
+  (string->number (cdr (assq 'number query))))
+
+
+
+#|
+
+(prompt (+ 2 (control k (k 5))))
+ = (prompt (+ 2 •)[(control k (k 5))])
+=>
+(prompt ((lambda (k) (k 5))
+         (lambda (v) (+ 2 •)[v])))
+=>
+(prompt ((lambda (v) (+ 2 •)[v])   5))
+=>
+(prompt (+ 2 •)[5]) => (prompt 7) => 7
+
+-----------
+
+(prompt (+ 2 (control k (+ 1 (control k1 (k1 6))))))
+=
+(prompt (+ 2 •)[(control k (+ 1 (control k1 (k1 6))))]
+=>
+(prompt ((lambda (k) (+ 1 (control k1 (k1 6))))
+         (lambda (v) (+ 2 •)[v])))
+=>
+(prompt (+ 1 (control k1 (k1 6))
+
+
+
+|#
+
+
+(define (send/suspend mk-page)
+  (let/cc k
+    (define tag (format "k~a" (current-inexact-milliseconds)))
+    (hash-set! dispatch-table tag k)
+    (abort (mk-page (string-append "/" tag)))))
+
+
+
+#|
+
+> (define m (printf "what's up?.... ~a" (get-number "first ")))
+`(html ...)
+
+> m
+error: undefined
+
+> ((hash-ref dispatch-table "k1498926479018.363") `((number . "10")))
+
+> m
+what's up?.... 10
+
+|#
