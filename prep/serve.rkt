@@ -14,13 +14,19 @@
     (tcp-close listener)))
 
 (define (accept-and-handle listener)
-  (define-values (in out) (tcp-accept listener))
-  (thread
-   (lambda ()
-     ;(sleep (random 10))
-     (handle in out)
-     (close-input-port in)
-     (close-output-port out))))
+  (define cust (make-custodian))
+  (parameterize ([current-custodian cust])
+    (define-values (in out) (tcp-accept listener))
+    (thread (lambda ()
+              ;(sleep (random 10))
+              (handle in out)
+              (close-input-port in)
+              (close-output-port out))))
+  ; Watcher thread:
+  (thread (lambda ()
+            (sleep 10)
+            (custodian-shutdown-all cust))))
+            ;(kill-thread t))))
 
 (define (handle in out)
   ; Discard the request header (up to blank line):
